@@ -5,11 +5,7 @@
   "main": "./index.js",
   "type": "commonjs",
   "scripts": {
-    "dev": "node index.js",
-    "start": "node index.js",
-    "stop": "pm2 stop atassamd",
-    "restart": "pm2 restart atassamd && pm2 logs",
-    "stash": "git stash && git stash drop"
+    "start": "node index.js"
   },
   "keywords": [
     "mauricegift",
