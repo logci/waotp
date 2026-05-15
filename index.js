@@ -90,6 +90,7 @@ const fs = require("fs-extra");
 const path = require("path");
 const axios = require('axios');
 const express = require("express");
+const { sendButtons } = require("gifted-btns");
 const { randomInt } = require("crypto");
 
 /**
@@ -138,6 +139,22 @@ function buildOtpMessage(otp) {
 ⚠️ Never share this code with anyone.`;
 }
 
+function buildOtpButtonMessage(otp) {
+    return {
+        text: buildOtpMessage(otp),
+        footer: "Tap the button below to copy your OTP.",
+        buttons: [
+            {
+                name: "cta_copy",
+                buttonParamsJson: JSON.stringify({
+                    display_text: "📋 Copy OTP",
+                    copy_code: otp,
+                }),
+            },
+        ],
+    };
+}
+
 async function sendOtpMessage(number, otp) {
     if (!Gifted?.user) {
         const error = new Error("WhatsApp session is not connected yet.");
@@ -147,13 +164,37 @@ async function sendOtpMessage(number, otp) {
 
     const jid = `${number}@s.whatsapp.net`;
     const text = buildOtpMessage(otp);
+    let copyButtonSent = false;
 
-    await Gifted.sendMessage(jid, { text });
+    try {
+        await sendButtons(Gifted, jid, buildOtpButtonMessage(otp));
+        copyButtonSent = true;
+    } catch (error) {
+        console.error("Failed to send OTP copy button, sending plain OTP instead:", error);
+        await Gifted.sendMessage(jid, { text });
+    }
 
-    return { jid, text };
+    return { jid, text, copyButtonSent };
 }
 
-function renderOtpPage({ otp, number, expiresInSeconds }) {
+function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, (char) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+    }[char]));
+}
+
+function renderOtpPage({ otp, number, expiresInSeconds, copyButtonSent }) {
+    const safeOtp = escapeHtml(otp);
+    const safeNumber = escapeHtml(number);
+    const safeMessage = escapeHtml(buildOtpMessage(otp));
+    const whatsappStatus = copyButtonSent
+        ? "WhatsApp copy button sent. If WhatsApp still shows ‘Waiting for this message’, copy the OTP from here."
+        : "WhatsApp button was not available, so a plain OTP message was sent. You can also copy it here.";
+
     return `<!doctype html>
 <html lang="en">
 <head>
@@ -161,24 +202,70 @@ function renderOtpPage({ otp, number, expiresInSeconds }) {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>OTP Sent</title>
 <style>
-body{font-family:Arial,sans-serif;background:#0f172a;color:#e2e8f0;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0;padding:24px}.card{width:min(460px,100%);background:#111827;border:1px solid #334155;border-radius:18px;padding:28px;box-shadow:0 20px 50px rgba(0,0,0,.35)}h1{margin:0 0 14px;font-size:26px}.otp{font-size:42px;letter-spacing:8px;font-weight:800;margin:18px 0;color:#f9a8d4}.msg{white-space:pre-line;line-height:1.55;color:#cbd5e1}.meta{color:#94a3b8;font-size:14px;margin-top:12px}.copy{width:100%;margin-top:22px;padding:14px 18px;border:0;border-radius:999px;background:#ec4899;color:white;font-size:16px;font-weight:700;cursor:pointer}.copy:active{transform:scale(.99)}.ok{display:none;color:#86efac;margin-top:12px;text-align:center}</style>
+:root{color-scheme:dark}*{box-sizing:border-box}body{font-family:Arial,sans-serif;background:linear-gradient(135deg,#0f172a,#3b0764);color:#e2e8f0;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0;padding:24px}.card{width:min(480px,100%);background:rgba(17,24,39,.94);border:1px solid #334155;border-radius:22px;padding:28px;box-shadow:0 20px 50px rgba(0,0,0,.35)}h1{margin:0 0 10px;font-size:26px}.hint{background:#1e293b;border:1px solid #475569;border-radius:14px;color:#cbd5e1;font-size:14px;line-height:1.5;margin:16px 0;padding:12px}.otp{font-size:42px;letter-spacing:8px;font-weight:800;margin:18px 0;color:#f9a8d4;text-align:center;user-select:all}.msg{white-space:pre-line;line-height:1.55;color:#cbd5e1}.meta{color:#94a3b8;font-size:14px;margin-top:12px}.copy{width:100%;margin-top:22px;padding:14px 18px;border:0;border-radius:999px;background:#ec4899;color:white;font-size:16px;font-weight:700;cursor:pointer}.copy:active{transform:scale(.99)}.copy.secondary{background:#334155;margin-top:10px}.ok{min-height:22px;color:#86efac;margin-top:12px;text-align:center}.warn{color:#fbbf24}</style>
 </head>
 <body>
 <div class="card">
 <h1>OTP sent on WhatsApp</h1>
-<div class="msg">${buildOtpMessage(otp)}</div>
-<div class="otp" id="otp">${otp}</div>
-<div class="meta">Number: ${number}<br>Expires in: ${expiresInSeconds} seconds</div>
-<button class="copy" onclick="copyOtp()">Copy OTP</button>
-<div class="ok" id="ok">Copied!</div>
+<div class="hint">${escapeHtml(whatsappStatus)}</div>
+<div class="msg">${safeMessage}</div>
+<div class="otp" id="otp" aria-label="One time password">${safeOtp}</div>
+<div class="meta">Number: ${safeNumber}<br>Expires in: ${expiresInSeconds} seconds</div>
+<button class="copy" id="copyBtn" type="button">📋 Copy OTP</button>
+<button class="copy secondary" id="selectBtn" type="button">Select OTP</button>
+<div class="ok" id="copyStatus" role="status" aria-live="polite"></div>
 </div>
 <script>
-async function copyOtp(){await navigator.clipboard.writeText(document.getElementById('otp').textContent.trim());document.getElementById('ok').style.display='block'}
+(function(){
+  const otpEl = document.getElementById('otp');
+  const statusEl = document.getElementById('copyStatus');
+  const getOtp = () => otpEl.textContent.trim();
+
+  function selectOtp(){
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(otpEl);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+
+  async function copyOtp(){
+    const otp = getOtp();
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(otp);
+      } else {
+        const input = document.createElement('textarea');
+        input.value = otp;
+        input.setAttribute('readonly', '');
+        input.style.position = 'fixed';
+        input.style.top = '-1000px';
+        document.body.appendChild(input);
+        input.select();
+        const copied = document.execCommand('copy');
+        document.body.removeChild(input);
+        if (!copied) throw new Error('Copy command unavailable');
+      }
+      statusEl.textContent = 'Copied!';
+      statusEl.className = 'ok';
+    } catch (error) {
+      selectOtp();
+      statusEl.textContent = 'Copy blocked by browser. OTP selected — press Ctrl+C / long-press Copy.';
+      statusEl.className = 'ok warn';
+    }
+  }
+
+  document.getElementById('copyBtn').addEventListener('click', copyOtp);
+  document.getElementById('selectBtn').addEventListener('click', function(){
+    selectOtp();
+    statusEl.textContent = 'OTP selected — press Ctrl+C / long-press Copy.';
+    statusEl.className = 'ok';
+  });
+})();
 </script>
 </body>
 </html>`;
 }
-
 function wantsJson(req) {
     return req.query.format === "json" || req.accepts(["html", "json"]) === "json";
 }
@@ -201,7 +288,7 @@ async function otpEndpoint(req, res) {
             if (saved?.otp === otp) otpStore.delete(number);
         }, OTP_TTL_MS).unref?.();
 
-        await sendOtpMessage(number, otp);
+        const sendResult = await sendOtpMessage(number, otp);
 
         const payload = {
             success: true,
@@ -209,6 +296,7 @@ async function otpEndpoint(req, res) {
             otp,
             expiresInSeconds: OTP_TTL_MS / 1000,
             message: buildOtpMessage(otp),
+            copyButtonSent: sendResult.copyButtonSent,
         };
 
         if (wantsJson(req)) return res.json(payload);
