@@ -91,7 +91,6 @@ const path = require("path");
 const axios = require('axios');
 const express = require("express");
 const { randomInt } = require("crypto");
-const { sendButtons } = require("gifted-btns");
 
 /**
  * Resolves any JID to a real phone JID (@s.whatsapp.net).
@@ -149,20 +148,7 @@ async function sendOtpMessage(number, otp) {
     const jid = `${number}@s.whatsapp.net`;
     const text = buildOtpMessage(otp);
 
-    await sendButtons(Gifted, jid, {
-        title: "",
-        text,
-        footer: "",
-        buttons: [
-            {
-                name: "cta_copy",
-                buttonParamsJson: JSON.stringify({
-                    display_text: "Copy OTP",
-                    copy_code: otp,
-                }),
-            },
-        ],
-    });
+    await Gifted.sendMessage(jid, { text });
 
     return { jid, text };
 }
