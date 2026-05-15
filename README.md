@@ -1,33 +1,45 @@
+# WhatsApp OTP Verification API
 
+This app keeps one WhatsApp session connected and exposes a simple OTP sender endpoint for Heroku or any Node.js host.
 
+## API Endpoint
 
-<div align="center">
+```text
+https://your-heroku-app.herokuapp.com/num={number}
+```
 
-<img src="https://raw.githubusercontent.com/nonxe/a1/main/aashif-banner.svg" width="800" alt="AASHIF-MD BY AASHIF SER"/>
+Example:
 
-</div>
+```text
+https://your-heroku-app.herokuapp.com/num=919876543210
+```
 
----
+When the endpoint is called:
 
-<div align="center">
+1. A 6-digit OTP is generated.
+2. The OTP is sent to the requested WhatsApp number.
+3. The HTTP response shows the same OTP with a copy button.
+4. The WhatsApp message also includes a copy OTP button.
 
-### 🌟 Welcome to **AASHIF-MD** 🌟
+WhatsApp message format:
 
-*A powerful WhatsApp Bot made with ❤️ by **Aashif Ser***
+```text
+🌸 *Your OTP is: {otp}*
 
-</div>
+⏳ Expires in 5 minutes.
+⚠️ Never share this code with anyone.
+```
 
---- 
+Use country code with the number and do not include `+`, spaces, or dashes.
 
+## JSON Response
 
+Add `?format=json` if you want JSON instead of the HTML copy-button page:
 
-## For HEROKU DEPLOYMENT
+```text
+https://your-heroku-app.herokuapp.com/num=919876543210?format=json
+```
 
-<a href="https://signup.heroku.com/login"><img src="https://img.shields.io/badge/HEROKU%20SIGNUP-white" alt="Heroku Signup" width="150"></a>
-  
-<a href="https://dashboard.heroku.com/new?template=https://github.com/nonxe/a1"><img src="https://img.shields.io/badge/DEPLOY%20NOW-red" alt="Deploy on Heroku" width="150"></a>
+## Heroku
 
-## For Localhost or Panel
-<a href="https://github.com/nonxe/a1/archive/refs/heads/main.zip">
-  <img src="https://img.shields.io/badge/⬇️ Download ZIP-Click Here-brightgreen?style=for-the-badge" alt="Download ZIP"/>
-</a>
+Set `SESSION_ID` in Heroku config vars, deploy the app, and use your Heroku app URL as the API base URL.

@@ -90,6 +90,8 @@ const fs = require("fs-extra");
 const path = require("path");
 const axios = require('axios');
 const express = require("express");
+const { randomInt } = require("crypto");
+const { sendButtons } = require("gifted-btns");
 
 /**
  * Resolves any JID to a real phone JID (@s.whatsapp.net).
@@ -118,11 +120,129 @@ async function resolveRealJid(Gifted, jid) {
     return jid;   // best effort — return original LID so the operation still fires
 }
 
+
+function createOtp() {
+    return String(randomInt(0, 1000000)).padStart(6, "0");
+}
+
+function normalizePhoneNumber(input) {
+    const raw = String(input || "").trim();
+    const digits = raw.replace(/[^0-9]/g, "");
+    if (!digits || digits.length < 8 || digits.length > 15) return null;
+    return digits;
+}
+
+function buildOtpMessage(otp) {
+    return `🌸 *Your OTP is: ${otp}*
+
+⏳ Expires in 5 minutes.
+⚠️ Never share this code with anyone.`;
+}
+
+async function sendOtpMessage(number, otp) {
+    if (!Gifted?.user) {
+        const error = new Error("WhatsApp session is not connected yet.");
+        error.statusCode = 503;
+        throw error;
+    }
+
+    const jid = `${number}@s.whatsapp.net`;
+    const text = buildOtpMessage(otp);
+
+    await sendButtons(Gifted, jid, {
+        title: "",
+        text,
+        footer: "",
+        buttons: [
+            {
+                name: "cta_copy",
+                buttonParamsJson: JSON.stringify({
+                    display_text: "Copy OTP",
+                    copy_code: otp,
+                }),
+            },
+        ],
+    });
+
+    return { jid, text };
+}
+
+function renderOtpPage({ otp, number, expiresInSeconds }) {
+    return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OTP Sent</title>
+<style>
+body{font-family:Arial,sans-serif;background:#0f172a;color:#e2e8f0;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0;padding:24px}.card{width:min(460px,100%);background:#111827;border:1px solid #334155;border-radius:18px;padding:28px;box-shadow:0 20px 50px rgba(0,0,0,.35)}h1{margin:0 0 14px;font-size:26px}.otp{font-size:42px;letter-spacing:8px;font-weight:800;margin:18px 0;color:#f9a8d4}.msg{white-space:pre-line;line-height:1.55;color:#cbd5e1}.meta{color:#94a3b8;font-size:14px;margin-top:12px}.copy{width:100%;margin-top:22px;padding:14px 18px;border:0;border-radius:999px;background:#ec4899;color:white;font-size:16px;font-weight:700;cursor:pointer}.copy:active{transform:scale(.99)}.ok{display:none;color:#86efac;margin-top:12px;text-align:center}</style>
+</head>
+<body>
+<div class="card">
+<h1>OTP sent on WhatsApp</h1>
+<div class="msg">${buildOtpMessage(otp)}</div>
+<div class="otp" id="otp">${otp}</div>
+<div class="meta">Number: ${number}<br>Expires in: ${expiresInSeconds} seconds</div>
+<button class="copy" onclick="copyOtp()">Copy OTP</button>
+<div class="ok" id="ok">Copied!</div>
+</div>
+<script>
+async function copyOtp(){await navigator.clipboard.writeText(document.getElementById('otp').textContent.trim());document.getElementById('ok').style.display='block'}
+</script>
+</body>
+</html>`;
+}
+
+function wantsJson(req) {
+    return req.query.format === "json" || req.accepts(["html", "json"]) === "json";
+}
+
+async function otpEndpoint(req, res) {
+    try {
+        const number = normalizePhoneNumber(req.params.number || req.query.num);
+        if (!number) {
+            return res.status(400).json({
+                success: false,
+                error: "Use /num=country_code_number, for example /num=919876543210",
+            });
+        }
+
+        const otp = createOtp();
+        const expiresAt = Date.now() + OTP_TTL_MS;
+        otpStore.set(number, { otp, expiresAt });
+        setTimeout(() => {
+            const saved = otpStore.get(number);
+            if (saved?.otp === otp) otpStore.delete(number);
+        }, OTP_TTL_MS).unref?.();
+
+        await sendOtpMessage(number, otp);
+
+        const payload = {
+            success: true,
+            number,
+            otp,
+            expiresInSeconds: OTP_TTL_MS / 1000,
+            message: buildOtpMessage(otp),
+        };
+
+        if (wantsJson(req)) return res.json(payload);
+        return res.type("html").send(renderOtpPage(payload));
+    } catch (error) {
+        const status = error.statusCode || 500;
+        return res.status(status).json({
+            success: false,
+            error: error.message || "Failed to send OTP",
+        });
+    }
+}
+
 const { SESSION_ID: sessionId } = config;
 const PORT = process.env.PORT || 5000;
 const app = express();
 let Gifted;
 let store;
+const otpStore = new Map();
+const OTP_TTL_MS = 5 * 60 * 1000;
 
 logger.level = "silent";
 app.use(express.static("gift"));
@@ -130,6 +250,8 @@ app.get("/", (req, res) => res.sendFile(__dirname + "/gift/gifted.html"));
 app.get("/health", (req, res) =>
     res.status(200).json({ status: "alive", uptime: process.uptime() }),
 );
+app.get("/num=:number", otpEndpoint);
+app.get("/otp", otpEndpoint);
 app.listen(PORT, () => console.log(`✅ Server Running on Port: ${PORT}`));
 
 setInterval(() => {
@@ -200,9 +322,7 @@ async function startGifted() {
         setupStatusHandlers(Gifted);
         setupGroupEventsListeners(Gifted);
 
-        loadPlugins(pluginsPath);
-
-        setupCommandHandler(Gifted);
+        // This deployment is API-only: keep the WhatsApp session online, but do not load bot commands.
 
         setupConnectionHandler(Gifted, sessionDir, startGifted, {
             onOpen: async (Gifted) => {
